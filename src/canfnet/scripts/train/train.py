@@ -40,7 +40,8 @@ from utils.loss import VistacLoss, VistacLossSep
 
 PROJECT_DIR: Path = Path(__file__).parent.resolve()
 MODELS_DIR: Path = Path(PROJECT_DIR, 'models')
-TRAIN_DIR: Path = Path(PROJECT_DIR, 'training_data')
+# TRAIN_DIR: Path = Path(PROJECT_DIR, 'training_data')
+TRAIN_DIR = Path(args.data_root) 
 DEVICE: str = 'cpu'
 FOLDS: Optional[int] = None
 EPOCHS: int = 5
@@ -111,7 +112,18 @@ class UNetTrainer(object):
         self.norm_lbl = norm_lbl
         self.augment: bool = augment
         self.mmap_mode: Optional[str] = mmap_mode
+        mmap_mode: Optional[str] = 'r',
+        model_old: Optional[nn.Module] = None,
+        lwf_lambda: float = 1.0
+        force_max: float = 3.0
+
         self._grad_scaler = torch.cuda.amp.GradScaler(enabled=AMP)
+        self._grad_scaler = torch.cuda.amp.GradScaler(enabled=AMP)
+
+        # lwf
+        self.model_old = model_old
+        self.lwf_lambda = lwf_lambda
+        self.force_max = force_max
 
         self.train_dir: Path = TRAIN_DIR
         self.epochs: int = EPOCHS
@@ -177,7 +189,16 @@ class UNetTrainer(object):
 
         for itr, batch in enumerate(tk0):
             images, f_dis, areas, f = batch.values()
-            loss, _ = self.forward(images, f_dis, areas, f)
+            # loss, _ = self.forward(images, f_dis, areas, f)
+            loss, outputs = self.forward(images, f_dis, areas, f)
+
+            # Force-Weighted LwF 
+            if self.model_old is not None:
+                with torch.no_grad():
+                    old_pred = self.model_old(images.to(self.device))
+                alpha = f.abs().to(self.device) / self.force_max     
+                lwf_pen = ((outputs - old_pred) ** 2).mean(dim=[1,2,3]) * alpha.mean(dim=[1,2,3])
+                loss = loss + self.lwf_lambda * lwf_pen.mean()
 
             if phase == 'train':
                 with torch.set_grad_enabled(True):
@@ -394,8 +415,19 @@ def get_args() -> argparse.Namespace:
                         help='Percent of the data that is used as validation (0-100)')
     parser.add_argument('--out-channels', '-c', dest='out_chs', metavar='val', type=int, default=OUTPUT_CHANNELS,
                         help='Number of output channels')
+    
     # parser.add_argument('--workers', '-w', metavar='val', type=int, default=NUM_WORKERS,
     #                    help='Number of workers for the data loader')
+
+    # add
+    # Path to the *frozen* network from the previous task (omit for first task)
+    parser.add_argument('--old-ckpt', type=str, default=None)
+    # Force-Weighted LwF hyper-parameters
+    parser.add_argument('--lwf-lambda', type=float, default=1.0)
+    parser.add_argument('--force-max',  type=float, default=3.0)
+    parser.add_argument('--data-root', required=True,
+                   help='Path to GelSight (or any) dataset folder that contains images/ and forces/')
+
 
     return parser.parse_args()
 
@@ -433,6 +465,15 @@ if __name__ == '__main__':
         unet.load_state_dict(torch.load(args.load, map_location=device)['state_dict'])
         logging.info(f'{util.PrintColors.OKBLUE}Model loaded from {args.load}{util.PrintColors.ENDC}\n')
 
+
+    from copy import deepcopy
+    model_old = None
+    if args.old_ckpt:
+        state_old = torch.load(args.old_ckpt, map_location=device)
+        model_old = deepcopy(unet).to(device)
+        model_old.load_state_dict(state_old['state_dict'])
+        model_old.eval().requires_grad_(False)
+
     logging.info(f'''Network:
         Encoder channels: {unet.enc_chs}
         Decoder channels: {unet.dec_chs}
@@ -456,8 +497,15 @@ if __name__ == '__main__':
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=0, verbose=True)
 
     # Create an UNetTrainer.
-    unet_trainer = UNetTrainer(unet, device, optimizer, scheduler, CRITERION,
-                               norm_img=NORM_IMG, norm_lbl=NORM_LBL, k=FOLDS, augment=AUGMENT, mmap_mode=MMAP_MODE)
+    # unet_trainer = UNetTrainer(unet, device, optimizer, scheduler, CRITERION,
+    #                            norm_img=NORM_IMG, norm_lbl=NORM_LBL, k=FOLDS, augment=AUGMENT, mmap_mode=MMAP_MODE)
+    unet_trainer = UNetTrainer(
+        unet, device, optimizer, scheduler, CRITERION,
+        norm_img=NORM_IMG, norm_lbl=NORM_LBL, k=FOLDS,
+        augment=AUGMENT, mmap_mode=MMAP_MODE,
+        model_old=model_old,
+        lwf_lambda=args.lwf_lambda,
+        force_max=args.force_max)
 
     # Start training.
     try:
