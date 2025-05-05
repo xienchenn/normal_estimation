@@ -1,3 +1,14 @@
+# Continual_CANFnet
+run with python3 src/canfnet/scripts/train/train.py \
+  --data-root /media/data1/xechen/test \
+  --device cuda \
+  --epochs 1 \
+  --batch-size 32 \
+  --load /media/home/xechen/normal_estimation/src/canfnet/scripts/train/models/model_05-05-2025_01-17-58.pth \
+  --old-ckpt /media/home/xechen/normal_estimation/src/canfnet/scripts/train/models/model_05-05-2025_01-17-58.pth \
+  --lwf-lambda 1.0 \
+  --force-max 3.0 \
+
 # CANFnet
 <a href="#"><img src="https://img.shields.io/badge/python-v3.8+-blue.svg?logo=python&style=for-the-badge" /></a>
 <a href="https://pytorch.org/"><img src="https://img.shields.io/badge/PyTorch-v1.12.1-red.svg?logo=PyTorch&style=for-the-badge" /></a>

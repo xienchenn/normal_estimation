@@ -21,7 +21,7 @@ import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 import torchvision as tv
 import torchvision.transforms as T
-# import neptune.new as neptune
+import neptune.new as neptune
 import matplotlib.pyplot as plt
 from torch import optim, Tensor
 from torch.utils.data import DataLoader, SubsetRandomSampler, random_split
@@ -94,15 +94,19 @@ class UNetTrainer(object):
     UNetTrainer.
     """
     def __init__(self, net: nn.Module,
-                 dev: torch.device,
-                 optimizer_: torch.optim,
-                 scheduler_: torch.optim.lr_scheduler,
-                 loss_fn: nn.Module,
-                 norm_img: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-                 norm_lbl: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-                 k: Optional[int] = 10,
-                 augment: bool = False,
-                 mmap_mode: Optional[str] = 'r') -> None:
+                dev: torch.device,
+                optimizer_: torch.optim.Optimizer,
+                scheduler_: torch.optim.lr_scheduler._LRScheduler,
+                loss_fn: nn.Module,
+                norm_img: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+                norm_lbl: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+                k: Optional[int] = 10,
+                augment: bool = False,
+                mmap_mode: Optional[str] = 'r',
+                model_old: Optional[nn.Module] = None,
+                lwf_lambda: float = 1.0,
+                force_max: float = 3.0) -> None:
+
         self.net: nn.Module = net.to(device=dev)
         self.device: torch.device = dev
         self.optimizer: torch.optim = optimizer_
@@ -112,10 +116,7 @@ class UNetTrainer(object):
         self.norm_lbl = norm_lbl
         self.augment: bool = augment
         self.mmap_mode: Optional[str] = mmap_mode
-        mmap_mode: Optional[str] = 'r',
-        model_old: Optional[nn.Module] = None,
-        lwf_lambda: float = 1.0
-        force_max: float = 3.0
+
 
         self._grad_scaler = torch.cuda.amp.GradScaler(enabled=AMP)
         self._grad_scaler = torch.cuda.amp.GradScaler(enabled=AMP)
@@ -195,10 +196,14 @@ class UNetTrainer(object):
             # Force-Weighted LwF 
             if self.model_old is not None:
                 with torch.no_grad():
-                    old_pred = self.model_old(images.to(self.device))
-                alpha = f.abs().to(self.device) / self.force_max     
-                lwf_pen = ((outputs - old_pred) ** 2).mean(dim=[1,2,3]) * alpha.mean(dim=[1,2,3])
-                loss = loss + self.lwf_lambda * lwf_pen.mean()
+                    old_outputs = self.model_old(images.to(self.device))
+
+                if isinstance(old_outputs, tuple):
+                    old_outputs = old_outputs[0]
+
+                    alpha = f.abs().to(self.device) / self.force_max
+                    lwf_pen = ((outputs - old_outputs) ** 2).mean(dim=[1,2,3]) * alpha.mean(dim=[1,2,3])
+                    loss = loss + self.lwf_lambda * lwf_pen.mean()
 
             if phase == 'train':
                 with torch.set_grad_enabled(True):
@@ -257,7 +262,7 @@ class UNetTrainer(object):
 
             for epoch in range(1, self.epochs + 1):
                 train_loss, train_loss_split = self.iterate(epoch, 'train', train_loader)
-                self.net.eval()     # Important for ONNX to turn the model to inference mode before saving.
+                self.net.eval()     
                 state_ = {
                     'fold': fold,
                     'epoch': epoch,
@@ -309,9 +314,17 @@ class UNetTrainer(object):
             train_set, val_set = random_split(vistac_dataset, [n_train, n_val],
                                               generator=torch.Generator().manual_seed(42))
 
+            # keep_train = int(1 * len(train_set))
+            # keep_val   = int(1 * len(val_set))
+            # keep_train = int(1)
+            # keep_val   = int(1 * len(val_set))
+            train_subset = torch.utils.data.Subset(train_set, torch.randperm(len(train_set))[:keep_train])
+            val_subset   = torch.utils.data.Subset(val_set,   torch.randperm(len(val_set))[:keep_val])
+
+
             # Create data loaders.
-            train_loader_list_.append(DataLoader(train_set, shuffle=True, **train_load_args))
-            val_loader_list_.append(DataLoader(val_set, **val_load_args))
+            train_loader_list_.append(DataLoader(train_subset, shuffle=True, **train_load_args))
+            val_loader_list_.append(DataLoader(val_subset, **val_load_args))
         else:
             for train_idx, val_idx in self._kfold.split(np.arange(len(vistac_dataset))):
                 train_sampler_ = SubsetRandomSampler(train_idx)
