@@ -21,7 +21,7 @@ import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 import torchvision as tv
 import torchvision.transforms as T
-import neptune.new as neptune
+# import neptune.new as neptune
 import matplotlib.pyplot as plt
 from torch import optim, Tensor
 from torch.utils.data import DataLoader, SubsetRandomSampler, random_split
@@ -41,7 +41,7 @@ from utils.loss import VistacLoss, VistacLossSep
 PROJECT_DIR: Path = Path(__file__).parent.resolve()
 MODELS_DIR: Path = Path(PROJECT_DIR, 'models')
 # TRAIN_DIR: Path = Path(PROJECT_DIR, 'training_data')
-TRAIN_DIR = Path(args.data_root) 
+# TRAIN_DIR = Path(args.data_root) 
 DEVICE: str = 'cpu'
 FOLDS: Optional[int] = None
 EPOCHS: int = 5
@@ -445,6 +445,8 @@ if __name__ == '__main__':
     DEVICE = args.device
     NEPTUNE = args.neptune
     OUTPUT_CHANNELS = args.out_chs
+    TRAIN_DIR = Path(args.data_root)
+
     # NUM_WORKERS = args.workers
 
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
